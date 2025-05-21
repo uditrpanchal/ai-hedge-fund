@@ -67,32 +67,44 @@ class FinancialMetricsResponse(BaseModel):
 
 class LineItem(BaseModel):
     ticker: str
-    report_period: str
-    period: str
-    currency: str
+    report_period: str  # Date of the report
+    period_type: str  # 'annual', 'quarterly', or 'ttm'
+    line_item_name: str  # Name of the specific financial line item
+    value: float | None = None
+    currency: str  # Currency of the value (e.g., USD)
 
-    # Allow additional fields dynamically
-    model_config = {"extra": "allow"}
 
-
-class LineItemResponse(BaseModel):
-    search_results: list[LineItem]
+class LineItemResponse(BaseModel): # This can now be a simple list if the function returns List[LineItem]
+    search_results: list[LineItem] 
+    # Alternatively, if the function directly returns List[LineItem], 
+    # this specific response model might not be strictly needed by the function's direct caller,
+    # but could be used by API endpoints. For now, keeping it as is.
 
 
 class InsiderTrade(BaseModel):
     ticker: str
-    issuer: str | None
-    name: str | None
-    title: str | None
-    is_board_director: bool | None
-    transaction_date: str | None
-    transaction_shares: float | None
-    transaction_price_per_share: float | None
-    transaction_value: float | None
-    shares_owned_before_transaction: float | None
-    shares_owned_after_transaction: float | None
-    security_title: str | None
-    filing_date: str
+    company_name: str | None # e.g., from ticker.info['shortName']
+    insider_name: str | None # From yfinance 'Insider'
+    insider_title: str | None # From yfinance 'Position'
+    is_board_director: bool | None # Heuristic: "director" in insider_title.lower()
+    transaction_date: str | None # From yfinance 'Start Date' (actual transaction date)
+    transaction_type: str | None # From yfinance 'Transaction' (e.g., "Sale", "Purchase")
+    transaction_shares: float | None # From yfinance 'Shares'
+    # Calculated: transaction_value / transaction_shares. Handle division by zero.
+    transaction_price_per_share: float | None 
+    transaction_value: float | None # From yfinance 'Value'
+    # The following two are often not available in simple yfinance transaction lists
+    shares_owned_before_transaction: float | None = None 
+    shares_owned_after_transaction: float | None # From yfinance 'Shares Owned Following Transaction' if available, else None
+                                                # Note: yfinance.insider_transactions doesn't seem to have this directly.
+                                                # yfinance.insider_roster_holders has 'Shares Owned Directly' but it's a current snapshot.
+    security_title: str | None = "Common Stock" # Default value, or from ticker.info['quoteType']
+    # yfinance 'Start Date' is transaction date. True SEC filing date not in this specific yf table.
+    # Using transaction_date for filing_date if it must be non-optional.
+    filing_date: str 
+    ownership_type: str | None # From yfinance 'Ownership' (e.g., 'D' for Direct, 'I' for Indirect)
+    url_to_filing: str | None # From yfinance 'URL'
+    transaction_description: str | None # From yfinance 'Text' (e.g., "Sale at price XXX")
 
 
 class InsiderTradeResponse(BaseModel):
@@ -100,13 +112,16 @@ class InsiderTradeResponse(BaseModel):
 
 
 class CompanyNews(BaseModel):
-    ticker: str
+    uuid: str # Unique ID for the news article
+    ticker: str # The primary ticker symbol this news is associated with
     title: str
-    author: str
-    source: str
-    date: str
-    url: str
-    sentiment: str | None = None
+    date: str # Publication date in YYYY-MM-DD format
+    source_name: str | None = None # Name of the news source (e.g., "Yahoo Finance")
+    url: str | None = None # URL to the full article
+    image_url: str | None = None # URL to a thumbnail or relevant image
+    description: str | None = None # A summary or snippet of the news article
+    tickers_mentioned: list[str] | None = None # Other tickers potentially mentioned or related
+    sentiment: str | None = None # Sentiment score/label (not provided by yfinance, will be None)
 
 
 class CompanyNewsResponse(BaseModel):
