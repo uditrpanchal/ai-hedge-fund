@@ -350,39 +350,91 @@ def get_financial_statements_response(ticker_symbol: str) -> LineItemResponse | 
         return None
 
 # --- Helper functions for financial metrics ---
-def _get_statement_value(df: pd.DataFrame | None, item_name: str, col_name_or_idx=0, default=None, prefer_float=True):
-    """Safely extracts a value from a DataFrame row/column."""
-    if df is None or df.empty or item_name not in df.index: return default
-    try:
-        # Determine the target column: if col_name_or_idx is a string, use it directly; otherwise, assume it's an integer index.
-        target_col = col_name_or_idx if isinstance(col_name_or_idx, str) else df.columns[col_name_or_idx]
-        if target_col not in df.columns: # Check if the resolved column name exists
-            logging.debug(f"Column '{target_col}' not found in DataFrame for item '{item_name}'.")
-            return default
-        value = df.loc[item_name, target_col]
-        if pd.isna(value) or value is None: return default
-        if prefer_float:
-            try: return float(value)
-            except (ValueError, TypeError): # If float conversion fails, return as string
-                logging.debug(f"Could not convert value '{value}' to float for item '{item_name}', returning as string.")
-                return str(value) 
-        return value 
-    except (KeyError, IndexError) as e: # Catch errors if item_name or col_idx is invalid
-        logging.debug(f"Error accessing item '{item_name}' at column '{col_name_or_idx}': {e}")
-        return default
+def _get_statement_value(df: pd.DataFrame | None, item_names: list[str], col_name_or_idx=0, default=None, prefer_float=True) -> tuple[any, str | None]:
+    """Safely extracts a value from a DataFrame row/column, trying multiple item names."""
+    if df is None or df.empty:
+        return (default, None)
 
-def _sum_last_n_quarters(df: pd.DataFrame | None, item_name: str, n: int = 4, default=None):
-    """Sums the 'n' most recent quarterly values for an item, ensuring numeric conversion."""
-    if df is None or df.empty or item_name not in df.index or len(df.columns) == 0 : return default
-    num_cols_to_sum = min(n, len(df.columns)) # Use available columns if less than n
-    if num_cols_to_sum == 0: return default
-    try:
-        # Select first num_cols_to_sum columns, convert to numeric (errors to NaN), fill NaN with 0, then sum.
-        relevant_values = pd.to_numeric(df.loc[item_name].iloc[:num_cols_to_sum], errors='coerce').fillna(0)
-        return relevant_values.sum() if relevant_values.notna().any() else default # Return sum or default if all were NaN
-    except Exception as e: # Catch any other unexpected error during calculation
-        logging.debug(f"Exception in _sum_last_n_quarters for item '{item_name}': {e}")
-        return default
+    found_item_name = None
+    value = default
+    
+    for name in item_names:
+        if name in df.index:
+            found_item_name = name
+            try:
+                # Determine the target column: if col_name_or_idx is a string, use it directly; otherwise, assume it's an integer index.
+                target_col = col_name_or_idx if isinstance(col_name_or_idx, str) else df.columns[col_name_or_idx]
+                if target_col not in df.columns: # Check if the resolved column name exists
+                    logging.debug(f"Column '{target_col}' not found in DataFrame for item '{found_item_name}'. Continuing to next name.")
+                    continue # Should ideally not happen if col_name_or_idx is 0 or a valid name from caller
+                
+                current_value = df.loc[found_item_name, target_col]
+
+                if pd.isna(current_value) or current_value is None:
+                    # Value is NaN/None for this found_item_name, try next name in item_names
+                    continue 
+                
+                if prefer_float:
+                    try:
+                        value = float(current_value)
+                    except (ValueError, TypeError): # If float conversion fails, value remains as string
+                        logging.debug(f"Could not convert value '{current_value}' to float for item '{found_item_name}', returning as string.")
+                        value = str(current_value)
+                else:
+                    value = current_value
+                
+                return (value, found_item_name) # Value found and processed
+
+            except (KeyError, IndexError) as e: # Catch errors if item_name or col_idx is invalid for this specific name
+                logging.debug(f"Error accessing item '{found_item_name}' at column '{col_name_or_idx}': {e}. Continuing to next name.")
+                continue # Try next name in the list
+    
+    # If loop completes, no name yielded a valid value
+    if found_item_name is None: # Log if no names were found at all
+        logging.debug(f"None of item names {item_names} found in DataFrame index. Available: {list(df.index) if df is not None else 'N/A'}")
+    return (default, None) # Return default if no name yielded a valid, non-NaN value or if no name was found
+
+
+def _sum_last_n_quarters(df: pd.DataFrame | None, item_names: list[str], n: int = 4, default=None) -> tuple[any, str | None]:
+    """Sums the 'n' most recent quarterly values for an item, trying multiple item names, ensuring numeric conversion."""
+    if df is None or df.empty or len(df.columns) == 0:
+        return (default, None)
+
+    num_cols_to_sum = min(n, len(df.columns))
+    if num_cols_to_sum == 0:
+        return (default, None)
+
+    for name in item_names:
+        if name in df.index:
+            found_item_name = name
+            try:
+                relevant_values_series = df.loc[found_item_name].iloc[:num_cols_to_sum]
+                if not relevant_values_series.notna().any(): # If all values in the window are NaN for this item name
+                    logging.debug(f"Item '{found_item_name}' has no non-NaN data in the last {num_cols_to_sum} quarters. Trying next name.")
+                    continue # Try next name
+
+                # Convert to numeric, coerce errors to NaN, then fill NaN with 0 for summation
+                numeric_values = pd.to_numeric(relevant_values_series, errors='coerce').fillna(0)
+                
+                # Ensure we don't just sum up a series of zeros if all were originally NaN or non-convertible
+                if numeric_values.eq(0).all() and not relevant_values_series.eq(0).all(): # if all numeric are 0 but not all original were 0
+                    # This condition means all valid numbers became 0 or all were NaN.
+                    # If there was at least one non-NaN original value that became non-zero, sum is valid.
+                    # If all original values were NaN, relevant_values_series.notna().any() would be false.
+                    # If all original values were convertible to 0, that's a valid sum.
+                    # This check is to ensure we don't return 0 if all were coerced NaNs.
+                    # The .notna().any() check on relevant_values_series already handles the all-NaN case.
+                     pass
+
+
+                return (numeric_values.sum(), found_item_name)
+            except Exception as e: # Catch any other unexpected error during calculation for this item name
+                logging.debug(f"Exception in _sum_last_n_quarters for item '{found_item_name}': {e}. Trying next name.")
+                continue # Try next name
+    
+    logging.debug(f"None of item names {item_names} found in DataFrame index or yielded valid sum. Available: {list(df.index) if df is not None else 'N/A'}")
+    return (default, None)
+
 
 def get_financial_metrics_response(ticker_symbol: str, include_historical: bool = False) -> FinancialMetricsResponse | None:
     """
@@ -445,28 +497,70 @@ def get_financial_metrics_response(ticker_symbol: str, include_historical: bool 
         })
 
         # Calculate TTM metrics using helper functions
-        revenue_ttm = _sum_last_n_quarters(income_q, 'Total Revenue', 4, _get_statement_value(income_a, 'Total Revenue'))
-        cogs_ttm = _sum_last_n_quarters(income_q, 'Cost Of Revenue', 4, _get_statement_value(income_a, 'Cost Of Revenue', default=0.0))
-        op_income_ttm = _sum_last_n_quarters(income_q, 'Operating Income', 4, _get_statement_value(income_a, 'Operating Income'))
+        # Define name lists for FCF components
+        OP_CASH_FLOW_NAMES = [
+            'Total Cash From Operating Activities',
+            'Cash Flow From Operating Activities',
+            'Net Cash Provided by Operating Activities',
+            'Operating Cash Flow'
+        ]
+        CAPEX_NAMES = [
+            'Capital Expenditures', 
+            'Purchase Of Property, Plant, And Equipment',
+            'Acquisition Of Property, Plant, And Equipment',
+        ]
+        POSITIVE_CAPEX_CONVENTION_NAMES = [ # Names that are typically positive values
+            'Purchase Of Property, Plant, And Equipment',
+            'Acquisition Of Property, Plant, And Equipment'
+        ]
+
+        # Original logic for revenue, cogs, op_income (assuming single, common names for these)
+        # For _get_statement_value, we pass a list even if it's just one name for consistency
+        revenue_annual_val, _ = _get_statement_value(income_a, ['Total Revenue'])
+        revenue_ttm, _ = _sum_last_n_quarters(income_q, ['Total Revenue'], 4, revenue_annual_val)
+        
+        cogs_annual_val, _ = _get_statement_value(income_a, ['Cost Of Revenue'], default=0.0)
+        cogs_ttm, _ = _sum_last_n_quarters(income_q, ['Cost Of Revenue'], 4, cogs_annual_val)
+        
+        op_income_annual_val, _ = _get_statement_value(income_a, ['Operating Income'])
+        op_income_ttm, _ = _sum_last_n_quarters(income_q, ['Operating Income'], 4, op_income_annual_val)
         
         if revenue_ttm and revenue_ttm != 0: # Avoid division by zero for margin calculations
             if cogs_ttm is not None: latest_metrics_dict["gross_margin"] = (revenue_ttm - cogs_ttm) / revenue_ttm
             if op_income_ttm: latest_metrics_dict["operating_margin"] = op_income_ttm / revenue_ttm
         
-        op_cashflow_ttm = _sum_last_n_quarters(cf_q, 'Total Cash From Operating Activities', 4, _get_statement_value(cf_a, 'Total Cash From Operating Activities'))
-        capex_ttm = _sum_last_n_quarters(cf_q, 'Capital Expenditures', 4, _get_statement_value(cf_a, 'Capital Expenditures')) # Capex is usually negative
+        # Updated FCF component fetching
+        op_cashflow_annual_val, _ = _get_statement_value(cf_a, OP_CASH_FLOW_NAMES)
+        op_cashflow_ttm, _ = _sum_last_n_quarters(cf_q, OP_CASH_FLOW_NAMES, 4, op_cashflow_annual_val)
+
+        capex_annual_val_raw, capex_annual_found_name = _get_statement_value(cf_a, CAPEX_NAMES)
+        capex_ttm_raw, capex_quarterly_found_name = _sum_last_n_quarters(cf_q, CAPEX_NAMES, 4, capex_annual_val_raw)
+
+        final_capex_raw = capex_ttm_raw
+        final_capex_found_name = capex_quarterly_found_name
+        if capex_ttm_raw is None and capex_annual_val_raw is not None:
+            final_capex_raw = capex_annual_val_raw
+            final_capex_found_name = capex_annual_found_name
+        
+        capex_ttm = None
+        if final_capex_raw is not None:
+            if final_capex_found_name in POSITIVE_CAPEX_CONVENTION_NAMES:
+                capex_ttm = -final_capex_raw # Invert sign
+            else:
+                capex_ttm = final_capex_raw
         
         fcf_ttm = None
-        if op_cashflow_ttm is not None and capex_ttm is not None:
-            fcf_ttm = op_cashflow_ttm + capex_ttm # Adding because capex is typically negative
-            latest_metrics_dict["free_cash_flow"] = fcf_ttm # Verified assignment
+        if op_cashflow_ttm is not None and capex_ttm is not None: # Ensure both components are valid
+            fcf_ttm = op_cashflow_ttm + capex_ttm # Capex_ttm is now sign-adjusted
+            latest_metrics_dict["free_cash_flow"] = fcf_ttm
             if shares_outstanding and shares_outstanding != 0:
                 latest_metrics_dict["free_cash_flow_per_share"] = fcf_ttm / shares_outstanding
-            if market_cap and market_cap != 0 and fcf_ttm is not None: # Ensure fcf_ttm was calculated
+            if market_cap and market_cap != 0 and fcf_ttm is not None: 
                 latest_metrics_dict["free_cash_flow_yield"] = fcf_ttm / market_cap
 
-        # Calculate TTM EBIT explicitly
-        op_income_ttm_for_ebit = _sum_last_n_quarters(income_q, 'Operating Income', 4, _get_statement_value(income_a, 'Operating Income'))
+        # Calculate TTM EBIT explicitly (assuming 'Operating Income' is the primary name)
+        op_income_ebit_annual_val, _ = _get_statement_value(income_a, ['Operating Income'])
+        op_income_ttm_for_ebit, _ = _sum_last_n_quarters(income_q, ['Operating Income'], 4, op_income_ebit_annual_val)
         latest_metrics_dict["ebit"] = op_income_ttm_for_ebit
 
         # Calculate TTM EV/EBIT
@@ -516,10 +610,10 @@ def get_financial_metrics_response(ticker_symbol: str, include_historical: bool 
                 })
 
                 # Calculate metrics using data for this specific historical column (col_name_str)
-                revenue_h = _get_statement_value(income_a, 'Total Revenue', col_name_str)
-                cogs_h = _get_statement_value(income_a, 'Cost Of Revenue', col_name_str, default=0.0)
-                op_income_h = _get_statement_value(income_a, 'Operating Income', col_name_str)
-                net_income_h = _get_statement_value(income_a, 'Net Income', col_name_str)
+                revenue_h, _ = _get_statement_value(income_a, ['Total Revenue'], col_name_str)
+                cogs_h, _ = _get_statement_value(income_a, ['Cost Of Revenue'], col_name_str, default=0.0)
+                op_income_h, _ = _get_statement_value(income_a, ['Operating Income'], col_name_str)
+                net_income_h, _ = _get_statement_value(income_a, ['Net Income'], col_name_str)
                 
                 if revenue_h and revenue_h != 0: # Avoid division by zero
                     if cogs_h is not None: hist_metrics_data["gross_margin"] = (revenue_h - cogs_h) / revenue_h
@@ -528,13 +622,23 @@ def get_financial_metrics_response(ticker_symbol: str, include_historical: bool 
                 
                 hist_metrics_data["ebit"] = op_income_h # Populate historical EBIT
 
-                assets_h = _get_statement_value(bs_a, 'Total Assets', col_name_str) # Match balance sheet date
-                liab_h = _get_statement_value(bs_a, 'Total Liab', col_name_str)   # Match balance sheet date
+                assets_h, _ = _get_statement_value(bs_a, ['Total Assets'], col_name_str) # Match balance sheet date
+                liab_h, _ = _get_statement_value(bs_a, ['Total Liab'], col_name_str)   # Match balance sheet date
                 if assets_h and liab_h: hist_metrics_data["book_value"] = assets_h - liab_h # Book value for that year
 
-                op_cf_h = _get_statement_value(cf_a, 'Total Cash From Operating Activities', col_name_str) # Match cash flow date
-                capex_h = _get_statement_value(cf_a, 'Capital Expenditures', col_name_str)           # Match cash flow date
-                if op_cf_h and capex_h: hist_metrics_data["free_cash_flow"] = op_cf_h + capex_h
+                op_cf_h, _ = _get_statement_value(cf_a, OP_CASH_FLOW_NAMES, col_name_str) 
+                capex_h_raw, capex_h_found_name = _get_statement_value(cf_a, CAPEX_NAMES, col_name_str)
+                
+                capex_h = None
+                if capex_h_raw is not None:
+                    if capex_h_found_name in POSITIVE_CAPEX_CONVENTION_NAMES:
+                        capex_h = -capex_h_raw
+                    else:
+                        capex_h = capex_h_raw
+                
+                if op_cf_h is not None and capex_h is not None: 
+                    hist_metrics_data["free_cash_flow"] = op_cf_h + capex_h
+
 
                 if revenue_h and assets_h and assets_h != 0:
                     hist_metrics_data["asset_turnover"] = revenue_h / assets_h
