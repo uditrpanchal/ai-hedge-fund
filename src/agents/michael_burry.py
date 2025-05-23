@@ -190,8 +190,8 @@ def _analyze_value(metrics, line_items, market_cap):
     details: list[str] = []
 
     # Free‑cash‑flow yield
-    latest_item = _latest_line_item(line_items)
-    fcf = getattr(latest_item, "free_cash_flow", None) if latest_item else None
+    # MODIFIED: Source FCF from FinancialMetrics (metrics[0]) instead of LineItem
+    fcf = getattr(metrics[0], "free_cash_flow", None) if metrics else None
     if fcf is not None and market_cap:
         fcf_yield = fcf / market_cap
         if fcf_yield >= 0.15:

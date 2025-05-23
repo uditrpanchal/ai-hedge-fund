@@ -459,11 +459,23 @@ def get_financial_metrics_response(ticker_symbol: str, include_historical: bool 
         fcf_ttm = None
         if op_cashflow_ttm is not None and capex_ttm is not None:
             fcf_ttm = op_cashflow_ttm + capex_ttm # Adding because capex is typically negative
-            latest_metrics_dict["free_cash_flow"] = fcf_ttm
+            latest_metrics_dict["free_cash_flow"] = fcf_ttm # Verified assignment
             if shares_outstanding and shares_outstanding != 0:
                 latest_metrics_dict["free_cash_flow_per_share"] = fcf_ttm / shares_outstanding
             if market_cap and market_cap != 0 and fcf_ttm is not None: # Ensure fcf_ttm was calculated
                 latest_metrics_dict["free_cash_flow_yield"] = fcf_ttm / market_cap
+
+        # Calculate TTM EBIT explicitly
+        op_income_ttm_for_ebit = _sum_last_n_quarters(income_q, 'Operating Income', 4, _get_statement_value(income_a, 'Operating Income'))
+        latest_metrics_dict["ebit"] = op_income_ttm_for_ebit
+
+        # Calculate TTM EV/EBIT
+        if latest_metrics_dict.get("enterprise_value") is not None and \
+           latest_metrics_dict.get("ebit") is not None and \
+           latest_metrics_dict["ebit"] != 0:
+            latest_metrics_dict["ev_to_ebit"] = latest_metrics_dict["enterprise_value"] / latest_metrics_dict["ebit"]
+        else:
+            latest_metrics_dict["ev_to_ebit"] = None
 
         total_assets_latest_annual = _get_statement_value(bs_a, 'Total Assets') # Use latest annual assets for turnover
         if revenue_ttm and total_assets_latest_annual and total_assets_latest_annual != 0:
@@ -514,6 +526,8 @@ def get_financial_metrics_response(ticker_symbol: str, include_historical: bool 
                     if op_income_h: hist_metrics_data["operating_margin"] = op_income_h / revenue_h
                     if net_income_h: hist_metrics_data["net_margin"] = net_income_h / revenue_h
                 
+                hist_metrics_data["ebit"] = op_income_h # Populate historical EBIT
+
                 assets_h = _get_statement_value(bs_a, 'Total Assets', col_name_str) # Match balance sheet date
                 liab_h = _get_statement_value(bs_a, 'Total Liab', col_name_str)   # Match balance sheet date
                 if assets_h and liab_h: hist_metrics_data["book_value"] = assets_h - liab_h # Book value for that year
