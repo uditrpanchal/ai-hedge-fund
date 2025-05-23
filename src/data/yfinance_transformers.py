@@ -513,11 +513,12 @@ def get_financial_metrics_response(ticker_symbol: str, include_historical: bool 
             'Purchase Of Property, Plant, And Equipment',
             'Acquisition Of Property, Plant, And Equipment'
         ]
+        REVENUE_NAMES = ['Total Revenue', 'Revenue'] # Added 'Revenue' as a common alternative
 
         # Original logic for revenue, cogs, op_income (assuming single, common names for these)
         # For _get_statement_value, we pass a list even if it's just one name for consistency
-        revenue_annual_val, _ = _get_statement_value(income_a, ['Total Revenue'])
-        revenue_ttm, _ = _sum_last_n_quarters(income_q, ['Total Revenue'], 4, revenue_annual_val)
+        revenue_annual_val, _ = _get_statement_value(income_a, REVENUE_NAMES)
+        revenue_ttm, _ = _sum_last_n_quarters(income_q, REVENUE_NAMES, 4, revenue_annual_val)
         
         cogs_annual_val, _ = _get_statement_value(income_a, ['Cost Of Revenue'], default=0.0)
         cogs_ttm, _ = _sum_last_n_quarters(income_q, ['Cost Of Revenue'], 4, cogs_annual_val)
@@ -571,9 +572,11 @@ def get_financial_metrics_response(ticker_symbol: str, include_historical: bool 
         else:
             latest_metrics_dict["ev_to_ebit"] = None
 
-        total_assets_latest_annual = _get_statement_value(bs_a, 'Total Assets') # Use latest annual assets for turnover
-        if revenue_ttm and total_assets_latest_annual and total_assets_latest_annual != 0:
+        total_assets_latest_annual, _ = _get_statement_value(bs_a, ['Total Assets']) # Use latest annual assets for turnover, ensure value extraction
+        if revenue_ttm is not None and total_assets_latest_annual is not None and total_assets_latest_annual != 0:
             latest_metrics_dict["asset_turnover"] = revenue_ttm / total_assets_latest_annual
+        else:
+            latest_metrics_dict["asset_turnover"] = None
         
         # Final type conversion for all numeric metric fields
         for key, value in latest_metrics_dict.items():
