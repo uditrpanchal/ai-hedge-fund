@@ -328,7 +328,7 @@ def prices_to_df(prices: list[Price]) -> pd.DataFrame:
     if not prices:
         return pd.DataFrame()
     df = pd.DataFrame([p.model_dump() for p in prices])
-    df["Date"] = pd.to_datetime(df["time"])
+    df["Date"] = pd.to_datetime(df["time"], utc=True)
     df.set_index("Date", inplace=True)
     numeric_cols = ["open", "close", "high", "low", "volume"]
     for col in numeric_cols:

@@ -147,6 +147,7 @@ if __name__ == "__main__":
     parser.add_argument("--show-reasoning", action="store_true", help="Show reasoning from each agent")
     parser.add_argument("--show-agent-graph", action="store_true", help="Show the agent graph")
     parser.add_argument("--ollama", action="store_true", help="Use Ollama for local LLM inference")
+    parser.add_argument("--default-analysts", type=str, help="Comma-separated list of default analyst keys to use in non-interactive mode (e.g., aswath_damodaran,ben_graham)")
 
     args = parser.parse_args()
 
@@ -158,39 +159,62 @@ if __name__ == "__main__":
     # If tickers are provided via CLI, assume non-interactive mode for analyst and model selection
     if args.tickers:
         print("Tickers provided via CLI. Detecting available LLM provider for non-interactive run...")
-        selected_analysts = [value for _, value in ANALYST_ORDER] # Default to all analysts
         
-        openai_api_key = os.getenv("OPENAI_API_KEY")
+        # --- Analyst Selection Logic ---
+        if args.default_analysts:
+            # Ensure ANALYST_CONFIG keys are accessible for validation if needed
+            # Or parse from ANALYST_ORDER's values
+            all_available_analyst_keys = [key for _, key in ANALYST_ORDER]
+            raw_default_analysts = [analyst.strip() for analyst in args.default_analysts.split(',')]
+            selected_analysts = []
+            valid_analysts_selected_display = [] # For storing display names
+            invalid_analysts = []
+            for analyst_key in raw_default_analysts:
+                if analyst_key in all_available_analyst_keys:
+                    selected_analysts.append(analyst_key)
+                    # Find display name for printing
+                    display_name = next((d_name for d_name, val in ANALYST_ORDER if val == analyst_key), analyst_key)
+                    valid_analysts_selected_display.append(display_name.title().replace('_', ' '))
+                else:
+                    invalid_analysts.append(analyst_key)
+            
+            if invalid_analysts:
+                print(f"{Fore.YELLOW}Warning: The following specified default analysts are invalid and will be ignored: {', '.join(invalid_analysts)}{Style.RESET_ALL}")
+            if not selected_analysts: # If all provided defaults were invalid or none were provided that were valid
+                 print(f"{Fore.YELLOW}No valid default analysts selected. No analysts will be run.{Style.RESET_ALL}")
+                 # selected_analysts is already []
+            else:
+                 print(f"Using specified default analysts: {', '.join(Fore.GREEN + name + Style.RESET_ALL for name in valid_analysts_selected_display)}")
+
+        else:
+            selected_analysts = [] # Default to no analysts if --default-analysts is not provided
+            print("No default analysts specified. No analysts will be run. Use --default-analysts to specify them.")
+        # --- End of Analyst Selection Logic ---
+        
+        # MODIFIED SECTION STARTS HERE
         deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
         
-        # Define placeholder values (ensure these match exactly what's in .env or would be default)
-
-        
- #       use_openai = openai_api_key and openai_api_key not in openai_placeholders
-        use_openai = openai_api_key
-        
-        if use_openai:
-            model_name = "gpt-4o" # Default OpenAI model
-            model_provider = ModelProvider.OPENAI.value
-            print(f"Using OpenAI model: {model_name} as valid OPENAI_API_KEY is available.")
-        # Explicitly check if the DeepSeek key is the known placeholder from .env
-        elif deepseek_api_key == 0:
+        if deepseek_api_key: # Check if the key exists and is not empty
+            model_provider = ModelProvider.DEEPSEEK.value
+            # Select a default DeepSeek model
             default_deepseek_model_info = next((m for m in LLM_ORDER if m[2] == ModelProvider.DEEPSEEK.value and not m[0].endswith("(Custom)")), None)
             if default_deepseek_model_info:
-                model_name = default_deepseek_model_info[1] # e.g., 'deepseek-chat' or 'deepseek-reasoner'
-                model_provider = ModelProvider.DEEPSEEK.value
-                print(f"Using DeepSeek model: {model_name} with placeholder DEEPSEEK_API_KEY ('{deepseek_api_key}') for testing.")
-            else: # This case should ideally not be hit if LLM_ORDER is correctly populated
-                print(f"{Fore.RED}No default DeepSeek model found in LLM_ORDER configuration. Exiting.{Style.RESET_ALL}")
-                sys.exit(1)
-        else: # Neither a valid OpenAI key nor the specific DeepSeek placeholder was found
-              # This branch would also be hit if DEEPSEEK_API_KEY is set to something else entirely (a real, non-placeholder key)
-              # but for this subtask, we are focused on the placeholder.
-            print(f"{Fore.RED}Required API key (valid OpenAI or specific DeepSeek placeholder '') not found for non-interactive run. Please check your .env file.{Style.RESET_ALL}")
-            print(f"DEBUG: OpenAI Key set: {bool(openai_api_key)} (value: '{openai_api_key}'), DeepSeek Key value: '{deepseek_api_key}'")
+                model_name = default_deepseek_model_info[1] # e.g., 'deepseek-chat'
+                print(f"Using DeepSeek model: {model_name} as DEEPSEEK_API_KEY is available in .env.")
+            else:
+                # Fallback if no default is found in LLM_ORDER, though this shouldn't happen with proper config
+                model_name = "deepseek-chat" # A common default
+                print(f"{Fore.YELLOW}No default DeepSeek model found in LLM_ORDER, defaulting to '{model_name}'. Ensure LLM_ORDER is configured.{Style.RESET_ALL}")
+                print(f"Using DeepSeek model: {model_name} as DEEPSEEK_API_KEY is available in .env.")
+        else:
+            print(f"{Fore.RED}DEEPSEEK_API_KEY not found or is empty in .env file. This is required for non-interactive mode.{Style.RESET_ALL}")
             sys.exit(1)
+        # MODIFIED SECTION ENDS HERE
             
-        print(f"\nUsing default analysts: {', '.join(Fore.GREEN + sa.title().replace('_', ' ') + Style.RESET_ALL for sa in selected_analysts)}")
+        # The print statement for analysts is now handled within the selection logic above.
+        # If selected_analysts is empty, this would print a confusing message or error.
+        # if selected_analysts: 
+        #    print(f"\nUsing default analysts: {', '.join(Fore.GREEN + sa.title().replace('_', ' ') + Style.RESET_ALL for sa in selected_analysts)}")
         print(f"Using default model: {Fore.CYAN}{model_provider}{Style.RESET_ALL} - {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n")
     else: # Interactive mode
         choices = questionary.checkbox(
