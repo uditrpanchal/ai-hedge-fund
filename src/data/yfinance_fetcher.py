@@ -11,6 +11,7 @@ It includes error handling and a validity check for ticker symbols.
 import yfinance as yf
 import pandas as pd
 import logging
+import json
 
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -80,12 +81,19 @@ class YFinanceDataFetcher:
             # The self.ticker.info attribute caches the result. If it was empty during __init__
             # and the ticker is somehow still valid (e.g. validated by history), this might still be empty.
             # A fresh call might be desired if caching behavior is an issue, but yfinance handles this.
-            info_data = self.ticker.info
+            try:
+                info_data = self.ticker.info
+            except json.JSONDecodeError as e:
+                logging.error(f"JSON decoding error fetching info for {self.ticker_symbol}: {e}")
+                return {}
             if not info_data: # Check if the info dict is empty
                 logging.warning(f"get_info: Info data is empty for ticker {self.ticker_symbol}.")
                 return {}
             return info_data
-        except Exception as e:
+        except json.JSONDecodeError as e: # This handles JSONDecodeError specifically
+            logging.error(f"JSON decoding error fetching info for {self.ticker_symbol}: {e}")
+            return {}
+        except Exception as e: # General exception handler
             logging.error(f"Error fetching info for {self.ticker_symbol}: {e}")
             return {}
 
@@ -108,6 +116,9 @@ class YFinanceDataFetcher:
             return pd.DataFrame()
         try:
             return self.ticker.history(period=period, interval=interval, start=start_date, end=end_date)
+        except json.JSONDecodeError as e:
+            logging.error(f"JSON decoding error fetching historical prices for {self.ticker_symbol}: {e}")
+            return pd.DataFrame()
         except Exception as e:
             logging.error(f"Error fetching historical prices for {self.ticker_symbol}: {e}")
             return pd.DataFrame()
@@ -149,7 +160,9 @@ class YFinanceDataFetcher:
                 logging.info(f"No {period} {statement_type} data found for {self.ticker_symbol}.")
                 return pd.DataFrame() # Ensure consistent empty DF return
             return data
-
+        except json.JSONDecodeError as e:
+            logging.error(f"JSON decoding error fetching {period} {statement_type} for {self.ticker_symbol}: {e}")
+            return pd.DataFrame()
         except Exception as e:
             logging.error(f"Error fetching {period} {statement_type} for {self.ticker_symbol}: {e}")
             return pd.DataFrame()
@@ -165,15 +178,20 @@ class YFinanceDataFetcher:
         if not self.valid_ticker or not self.ticker:
             logging.info(f"get_news: Ticker {self.ticker_symbol} is invalid or not initialized. Returning empty data.")
             return []
+        news_data = None # Initialize news_data to prevent UnboundLocalError
         try:
             news_data = self.ticker.news
-            if news_data is None: # Explicitly check for None, though yfinance usually returns list
-                logging.info(f"News data for {self.ticker_symbol} was None.")
-                return []
-            return news_data
+        except json.JSONDecodeError as e:
+            logging.error(f"JSON decoding error fetching news for {self.ticker_symbol}: {e}")
+            return []
         except Exception as e:
             logging.error(f"Error fetching news for {self.ticker_symbol}: {e}")
             return []
+        
+        if news_data is None: # Explicitly check for None, though yfinance usually returns list
+            logging.info(f"News data for {self.ticker_symbol} was None.")
+            return []
+        return news_data
 
     def get_insider_transactions(self) -> pd.DataFrame:
         """
@@ -189,17 +207,22 @@ class YFinanceDataFetcher:
         if not self.valid_ticker or not self.ticker:
             logging.info(f"get_insider_transactions: Ticker {self.ticker_symbol} is invalid or not initialized. Returning empty data.")
             return pd.DataFrame()
+        transactions = None # Initialize transactions to prevent UnboundLocalError
         try:
             transactions = self.ticker.insider_transactions
-            if transactions is None: # yfinance might return None if no data
-                 logging.info(f"No insider transactions data found for {self.ticker_symbol} (method returned None).")
-                 return pd.DataFrame()
-            if transactions.empty:
-                 logging.info(f"Insider transactions data is empty for {self.ticker_symbol}.")
-            return transactions
+        except json.JSONDecodeError as e:
+            logging.error(f"JSON decoding error fetching insider transactions for {self.ticker_symbol}: {e}")
+            return pd.DataFrame()
         except AttributeError: # If the 'insider_transactions' attribute itself doesn't exist
-             logging.warning(f"'insider_transactions' attribute not found for {self.ticker_symbol}. The yfinance API might have changed or this data is unavailable.")
-             return pd.DataFrame()
+            logging.warning(f"'insider_transactions' attribute not found for {self.ticker_symbol}. The yfinance API might have changed or this data is unavailable.")
+            return pd.DataFrame()
         except Exception as e: # Catch any other exceptions during the fetch
             logging.error(f"Error fetching insider transactions for {self.ticker_symbol}: {e}")
             return pd.DataFrame()
+
+        if transactions is None: # yfinance might return None if no data
+            logging.info(f"No insider transactions data found for {self.ticker_symbol} (method returned None).")
+            return pd.DataFrame()
+        if transactions.empty: # This check is valid for DataFrames
+            logging.info(f"Insider transactions data is empty for {self.ticker_symbol}.")
+        return transactions
