@@ -148,75 +148,42 @@ if __name__ == "__main__":
     parser.add_argument("--show-agent-graph", action="store_true", help="Show the agent graph")
     parser.add_argument("--ollama", action="store_true", help="Use Ollama for local LLM inference")
     parser.add_argument("--default-analysts", type=str, help="Comma-separated list of default analyst keys to use in non-interactive mode (e.g., aswath_damodaran,ben_graham)")
+    parser.add_argument("--llm-provider", type=str, choices=[provider.value for provider in ModelProvider], help="Specify the LLM provider non-interactively (e.g., deepseek, ollama).")
+    parser.add_argument("--llm-model", type=str, help="Specify the LLM model name non-interactively.")
 
     args = parser.parse_args()
 
     # Parse tickers from comma-separated string
+    # Note: args.tickers is required by argparse, so it will always be present.
     tickers = [ticker.strip() for ticker in args.tickers.split(",")]
 
-    # Select analysts
+    # --- Analyst Selection ---
     selected_analysts = None
-    # If tickers are provided via CLI, assume non-interactive mode for analyst and model selection
-    if args.tickers:
-        print("Tickers provided via CLI. Detecting available LLM provider for non-interactive run...")
-        
-        # --- Analyst Selection Logic ---
-        if args.default_analysts:
-            # Ensure ANALYST_CONFIG keys are accessible for validation if needed
-            # Or parse from ANALYST_ORDER's values
-            all_available_analyst_keys = [key for _, key in ANALYST_ORDER]
-            raw_default_analysts = [analyst.strip() for analyst in args.default_analysts.split(',')]
-            selected_analysts = []
-            valid_analysts_selected_display = [] # For storing display names
-            invalid_analysts = []
-            for analyst_key in raw_default_analysts:
-                if analyst_key in all_available_analyst_keys:
-                    selected_analysts.append(analyst_key)
-                    # Find display name for printing
-                    display_name = next((d_name for d_name, val in ANALYST_ORDER if val == analyst_key), analyst_key)
-                    valid_analysts_selected_display.append(display_name.title().replace('_', ' '))
-                else:
-                    invalid_analysts.append(analyst_key)
-            
-            if invalid_analysts:
-                print(f"{Fore.YELLOW}Warning: The following specified default analysts are invalid and will be ignored: {', '.join(invalid_analysts)}{Style.RESET_ALL}")
-            if not selected_analysts: # If all provided defaults were invalid or none were provided that were valid
-                 print(f"{Fore.YELLOW}No valid default analysts selected. No analysts will be run.{Style.RESET_ALL}")
-                 # selected_analysts is already []
+    if args.default_analysts:
+        # Non-interactive analyst selection logic
+        print("Using default analysts specified via --default-analysts.")
+        all_available_analyst_keys = [key for _, key in ANALYST_ORDER]
+        raw_default_analysts = [analyst.strip() for analyst in args.default_analysts.split(',')]
+        selected_analysts = []
+        valid_analysts_selected_display = []
+        invalid_analysts = []
+        for analyst_key in raw_default_analysts:
+            if analyst_key in all_available_analyst_keys:
+                selected_analysts.append(analyst_key)
+                display_name = next((d_name for d_name, val in ANALYST_ORDER if val == analyst_key), analyst_key)
+                valid_analysts_selected_display.append(display_name.title().replace('_', ' '))
             else:
-                 print(f"Using specified default analysts: {', '.join(Fore.GREEN + name + Style.RESET_ALL for name in valid_analysts_selected_display)}")
-
-        else:
-            selected_analysts = [] # Default to no analysts if --default-analysts is not provided
-            print("No default analysts specified. No analysts will be run. Use --default-analysts to specify them.")
-        # --- End of Analyst Selection Logic ---
+                invalid_analysts.append(analyst_key)
         
-        # MODIFIED SECTION STARTS HERE
-        deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-        
-        if deepseek_api_key: # Check if the key exists and is not empty
-            model_provider = ModelProvider.DEEPSEEK.value
-            # Select a default DeepSeek model
-            default_deepseek_model_info = next((m for m in LLM_ORDER if m[2] == ModelProvider.DEEPSEEK.value and not m[0].endswith("(Custom)")), None)
-            if default_deepseek_model_info:
-                model_name = default_deepseek_model_info[1] # e.g., 'deepseek-chat'
-                print(f"Using DeepSeek model: {model_name} as DEEPSEEK_API_KEY is available in .env.")
-            else:
-                # Fallback if no default is found in LLM_ORDER, though this shouldn't happen with proper config
-                model_name = "deepseek-chat" # A common default
-                print(f"{Fore.YELLOW}No default DeepSeek model found in LLM_ORDER, defaulting to '{model_name}'. Ensure LLM_ORDER is configured.{Style.RESET_ALL}")
-                print(f"Using DeepSeek model: {model_name} as DEEPSEEK_API_KEY is available in .env.")
+        if invalid_analysts:
+            print(f"{Fore.YELLOW}Warning: The following specified default analysts are invalid and will be ignored: {', '.join(invalid_analysts)}{Style.RESET_ALL}")
+        if not selected_analysts:
+            print(f"{Fore.YELLOW}No valid default analysts selected. No analysts will be run.{Style.RESET_ALL}")
         else:
-            print(f"{Fore.RED}DEEPSEEK_API_KEY not found or is empty in .env file. This is required for non-interactive mode.{Style.RESET_ALL}")
-            sys.exit(1)
-        # MODIFIED SECTION ENDS HERE
-            
-        # The print statement for analysts is now handled within the selection logic above.
-        # If selected_analysts is empty, this would print a confusing message or error.
-        # if selected_analysts: 
-        #    print(f"\nUsing default analysts: {', '.join(Fore.GREEN + sa.title().replace('_', ' ') + Style.RESET_ALL for sa in selected_analysts)}")
-        print(f"Using default model: {Fore.CYAN}{model_provider}{Style.RESET_ALL} - {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n")
-    else: # Interactive mode
+            print(f"Using specified default analysts: {', '.join(Fore.GREEN + name + Style.RESET_ALL for name in valid_analysts_selected_display)}\n")
+    else:
+        # Interactive analyst selection using questionary
+        print("No default analysts specified, proceeding with interactive selection.")
         choices = questionary.checkbox(
             "Select your AI analysts.",
             choices=[questionary.Choice(display, value=value) for display, value in ANALYST_ORDER],
@@ -237,17 +204,42 @@ if __name__ == "__main__":
             sys.exit(0)
         else:
             selected_analysts = choices
-            print(f"\nSelected analysts: {', '.join(Fore.GREEN + choice.title().replace('_', ' ') + Style.RESET_ALL for choice in choices)}\n")
+            print(f"\nSelected analysts: {', '.join(Fore.GREEN + choice.title().replace('_', ' ') + Style.RESET_ALL for choice in selected_analysts)}\n")
 
-        # Select LLM model based on whether Ollama is being used
-        model_name = ""
-        model_provider = ""
+    # --- LLM Model and Provider Selection ---
+    model_name = ""
+    model_provider = ""
 
+    if args.llm_provider and args.llm_model:
+        print("Using non-interactive LLM selection based on --llm-provider and --llm-model arguments.")
+        model_provider = args.llm_provider
+        model_name = args.llm_model
+
+        if model_provider == ModelProvider.OLLAMA.value:
+            if not ensure_ollama_and_model(model_name):
+                print(f"{Fore.RED}Ollama setup for model '{model_name}' failed. Cannot proceed.{Style.RESET_ALL}")
+                sys.exit(1)
+            # print(f"Verified Ollama and model '{model_name}'.") # Optional: too verbose
+        elif model_provider == ModelProvider.DEEPSEEK.value:
+            deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+            if not deepseek_api_key:
+                print(f"{Fore.RED}DEEPSEEK_API_KEY not found in .env file. This is required for the '{model_provider}' provider.{Style.RESET_ALL}")
+                sys.exit(1)
+            # print(f"DEEPSEEK_API_KEY found. Proceeding with provider '{model_provider}'.") # Optional: too verbose
+        # Add more provider checks here if necessary in the future (e.g., for OPENAI_API_KEY if OpenAI is non-interactively selected)
+        elif model_provider == ModelProvider.OPENAI.value: # Example for OpenAI non-interactive
+            openai_api_key = os.getenv("OPENAI_API_KEY")
+            if not openai_api_key:
+                print(f"{Fore.RED}OPENAI_API_KEY not found in .env file. This is required for the '{model_provider}' provider.{Style.RESET_ALL}")
+                sys.exit(1)
+
+        print(f"\nUsing specified LLM provider: {Fore.CYAN}{model_provider}{Style.RESET_ALL} and model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n")
+
+    else: # Fallback to interactive LLM selection
+        print("Proceeding with interactive LLM selection (as --llm-provider and --llm-model were not both specified).")
         if args.ollama:
             print(f"{Fore.CYAN}Using Ollama for local LLM inference.{Style.RESET_ALL}")
-
-            # Select from Ollama-specific models
-            model_name: str = questionary.select(
+            model_name_str: str = questionary.select( 
                 "Select your Ollama model:",
                 choices=[questionary.Choice(display, value=value) for display, value, _ in OLLAMA_LLM_ORDER],
                 style=questionary.Style(
@@ -259,6 +251,7 @@ if __name__ == "__main__":
                     ]
                 ),
             ).ask()
+            model_name = model_name_str 
 
             if not model_name:
                 print("\n\nInterrupt received. Exiting...")
@@ -270,7 +263,6 @@ if __name__ == "__main__":
                     print("\n\nInterrupt received. Exiting...")
                     sys.exit(0)
 
-            # Ensure Ollama is installed, running, and the model is available
             if not ensure_ollama_and_model(model_name):
                 print(f"{Fore.RED}Cannot proceed without Ollama and the selected model.{Style.RESET_ALL}")
                 sys.exit(1)
@@ -278,7 +270,7 @@ if __name__ == "__main__":
             model_provider = ModelProvider.OLLAMA.value
             print(f"\nSelected {Fore.CYAN}Ollama{Style.RESET_ALL} model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n")
         else:
-            # Use the standard cloud-based LLM selection
+            # Interactive standard cloud-based LLM selection
             model_choice = questionary.select(
                 "Select your LLM model:",
                 choices=[questionary.Choice(display, value=(name, provider)) for display, name, provider in LLM_ORDER],
@@ -297,21 +289,36 @@ if __name__ == "__main__":
                 sys.exit(0)
 
             model_name, model_provider = model_choice
+            model_info = get_model_info(model_name, model_provider) # model_info might be None if it's a custom model not in LLM_ORDER
 
-            # Get model info using the helper function
-            model_info = get_model_info(model_name, model_provider)
-            if model_info:
-                if model_info.is_custom():
-                    model_name = questionary.text("Enter the custom model name:").ask()
-                    if not model_name:
-                        print("\n\nInterrupt received. Exiting...")
-                        sys.exit(0)
+            if model_info and model_info.is_custom(): # if model_info is None, it's treated as custom too.
+                 model_name = questionary.text(f"Enter the custom model name for {model_provider}:").ask()
+                 if not model_name:
+                    print("\n\nInterrupt received. Exiting...")
+                    sys.exit(0)
+            elif not model_info and not (model_name == "-" or any(model_name == m[1] for m in LLM_ORDER)): # If not in LLM_ORDER and not a custom placeholder
+                # This case is for when a model name was entered that's not in LLM_ORDER and not marked custom.
+                # It's effectively a custom model name.
+                # The current logic assumes custom models are explicitly marked with '-' or similar.
+                # For safety, if a model is not in LLM_ORDER and not explicitly custom, we can treat it as such or warn.
+                # For now, we assume model_name is final if it wasn't '-'
+                 pass
 
-                print(f"\nSelected {Fore.CYAN}{model_provider}{Style.RESET_ALL} model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n")
-            else:
-                model_provider = "Unknown" # Should not happen if choice is from LLM_ORDER
-                print(f"\nSelected model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n")
 
+            # API Key checks for interactively selected cloud providers
+            if model_provider == ModelProvider.DEEPSEEK.value:
+                deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+                if not deepseek_api_key:
+                    print(f"{Fore.RED}DEEPSEEK_API_KEY not found in .env file. This is required for the selected '{model_provider}' provider.{Style.RESET_ALL}")
+                    sys.exit(1)
+            elif model_provider == ModelProvider.OPENAI.value: # Example for OpenAI interactive
+                openai_api_key = os.getenv("OPENAI_API_KEY")
+                if not openai_api_key:
+                    print(f"{Fore.RED}OPENAI_API_KEY not found in .env file. This is required for the selected '{model_provider}' provider.{Style.RESET_ALL}")
+                    sys.exit(1)
+
+            print(f"\nSelected {Fore.CYAN}{model_provider}{Style.RESET_ALL} model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n")
+            
     # Create the workflow with selected analysts
     workflow = create_workflow(selected_analysts)
     app = workflow.compile()
