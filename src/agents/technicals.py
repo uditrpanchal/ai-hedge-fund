@@ -1,5 +1,8 @@
 import math
 
+# Minimum number of data points required for meaningful technical analysis
+MIN_DATA_POINTS = 150
+
 from langchain_core.messages import HumanMessage
 
 from src.graph.state import AgentState, show_agent_reasoning
@@ -46,6 +49,22 @@ def technical_analyst_agent(state: AgentState):
 
         # Convert prices to a DataFrame
         prices_df = prices_to_df(prices)
+
+        if len(prices_df) < MIN_DATA_POINTS:
+            progress.update_status("technical_analyst_agent", ticker, f"Failed: Insufficient data ({len(prices_df)} points, requires {MIN_DATA_POINTS})")
+            technical_analysis[ticker] = {
+                "signal": "neutral", 
+                "confidence": 0,
+                "reasoning_text": f"Insufficient historical data: {len(prices_df)} data points available, but {MIN_DATA_POINTS} are recommended for comprehensive technical analysis.",
+                "strategy_signals": { 
+                    "trend_following": {"signal": "neutral", "confidence": 0, "metrics": {"reason": "Insufficient data"}},
+                    "mean_reversion": {"signal": "neutral", "confidence": 0, "metrics": {"reason": "Insufficient data"}},
+                    "momentum": {"signal": "neutral", "confidence": 0, "metrics": {"reason": "Insufficient data"}},
+                    "volatility": {"signal": "neutral", "confidence": 0, "metrics": {"reason": "Insufficient data"}},
+                    "statistical_arbitrage": {"signal": "neutral", "confidence": 0, "metrics": {"reason": "Insufficient data"}},
+                }
+            }
+            continue 
 
         progress.update_status("technical_analyst_agent", ticker, "Calculating trend signals")
         trend_signals = calculate_trend_signals(prices_df)
